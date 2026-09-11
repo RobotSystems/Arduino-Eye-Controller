@@ -6,55 +6,44 @@
 // PCA9685 registers
 #define MODE1 0x00
 #define MODE2 0x01
-#define SUBREG1 0x02
-#define SUBREG2 0x03
-#define SUBREG3 0x04
+#define PRE_SCALE 0xFE
 #define LED0_ON_L 0x06
 #define LED0_ON_H 0x07
 #define LED0_OFF_L 0x08
 #define LED0_OFF_H 0x09
-#define ALL_LED_ON_L 0xFA
-#define ALL_LED_ON_H 0xFB
-#define ALL_LED_OFF_L 0xFC
-#define ALL_LED_OFF_H 0xFD
-#define PRE_SCALE 0xFE
 
-// Servo configuratie: {min_angle, max_angle, start_angle, PCA9685_pin}
+// Servo configuratie
 struct ServoConfig {
+  const char* name;
   int min_angle;
   int max_angle;
   int start_angle;
   int pca_pin;
 };
 
-// Servo's opslaan
-std::map<String, ServoConfig> servos;
+// Alle servo's - SIMPEL array in plaats van std::map
+ServoConfig servos[] = {
+  {"LR", 40, 140, 90, 0},    // Links/Rechts - Pin 0
+  {"UD", 40, 140, 90, 1},    // Omhoog/Omlaag - Pin 1
+  {"TL", 90, 170, 130, 2},   // Ooglid Links Boven - Pin 2
+  {"BL", 10, 90, 50, 3},     // Ooglid Links Onder - Pin 3
+  {"TR", 10, 90, 50, 4},     // Ooglid Rechts Boven - Pin 4
+  {"BR", 90, 160, 125, 5}    // Ooglid Rechts Onder - Pin 5
+};
+
+#define NUM_SERVOS 6
 
 void setup() {
-  // Seriele communicatie starten (115200 baud)
   Serial.begin(115200);
   delay(2000);
   
   Serial.println("\n=== Arduino Mega Eye Controller ===");
   Serial.println("PCA9685 servo controller initialiseren...");
   
-  // I2C starten
   Wire.begin();
   delay(100);
   
-  // PCA9685 initialiseren
   initPCA9685();
-  
-  // Servo configuratie definiëren
-  // LET OP: Pas de PCA9685 pin nummers aan naar waar jouw servos zitten!
-  servos["LR"]  = {40, 140, 90, 0};   // Links/Rechts - Pin 0
-  servos["UD"]  = {40, 140, 90, 1};   // Omhoog/Omlaag - Pin 1
-  servos["TL"]  = {90, 170, 130, 2};  // Ooglid Links Boven - Pin 2
-  servos["BL"]  = {10, 90, 50, 3};    // Ooglid Links Onder - Pin 3
-  servos["TR"]  = {10, 90, 50, 4};    // Ooglid Rechts Boven - Pin 4
-  servos["BR"]  = {90, 160, 125, 5};  // Ooglid Rechts Onder - Pin 5
-  
-  // Alle servo's naar startpositie
   goToStartPositions();
   
   Serial.println("Klaar voor commando's!");
@@ -62,7 +51,6 @@ void setup() {
 }
 
 void loop() {
-  // Seriële commando's verwerken
   if (Serial.available()) {
     String command = Serial.readStringUntil('\n');
     command.trim();
@@ -75,21 +63,15 @@ void loop() {
 
 // PCA9685 initialiseren
 void initPCA9685() {
-  // MODE1: Sleep uitschakelen, auto-increment inschakelen
   writePCA9685(MODE1, 0x01);
   delay(10);
   
-  // MODE2: invert uit, totem-pole
   writePCA9685(MODE2, 0x04);
   
-  // Frequentie instellen op 50 Hz (voor servo's)
-  // Formule: prescale = (osc_freq / (freq * 4096)) - 1
-  // Met osc_freq = 25 MHz: prescale = (25000000 / (50 * 4096)) - 1 = 121
+  // 50 Hz frequentie
   writePCA9685(PRE_SCALE, 121);
-  
   delay(10);
   
-  // MODE1: Sleep uitzetten
   writePCA9685(MODE1, 0x01);
   
   Serial.println("PCA9685 geïnitialiseerd (50Hz)");
@@ -101,15 +83,6 @@ void writePCA9685(uint8_t reg, uint8_t data) {
   Wire.write(reg);
   Wire.write(data);
   Wire.endTransmission();
-}
-
-// Lees van PCA9685 register
-uint8_t readPCA9685(uint8_t reg) {
-  Wire.beginTransmission(PCA9685_ADDR);
-  Wire.write(reg);
-  Wire.endTransmission();
-  Wire.requestFrom(PCA9685_ADDR, 1);
-  return Wire.read();
 }
 
 // Stuur PWM naar een kanaal
@@ -128,12 +101,22 @@ void setPWM(uint8_t channel, uint16_t on, uint16_t off) {
   Wire.endTransmission();
 }
 
-// Parseer inkomende commando's in formaat: "LR:90"
+// Vind servo in array
+int findServo(String servoName) {
+  for (int i = 0; i < NUM_SERVOS; i++) {
+    if (servoName.equals(servos[i].name)) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+// Parseer inkomende commando's "LR:90"
 void parseCommand(String command) {
   int colonPos = command.indexOf(':');
   
   if (colonPos == -1) {
-    Serial.println("FOUT: Ongeldig formaat. Gebruik: SERVO:HOEK");
+    Serial.println("FOUT: Gebruik formaat SERVO:HOEK (bijv: LR:90)");
     return;
   }
   
@@ -143,8 +126,9 @@ void parseCommand(String command) {
   servoName.trim();
   angleStr.trim();
   
-  // Controleer of servo bestaat
-  if (servos.find(servoName) == servos.end()) {
+  int servoIndex = findServo(servoName);
+  
+  if (servoIndex == -1) {
     Serial.print("FOUT: Servo '");
     Serial.print(servoName);
     Serial.println("' onbekend!");
@@ -152,9 +136,8 @@ void parseCommand(String command) {
   }
   
   int angle = angleStr.toInt();
-  ServoConfig config = servos[servoName];
+  ServoConfig config = servos[servoIndex];
   
-  // Controleer bereik
   if (angle < config.min_angle || angle > config.max_angle) {
     Serial.print("FOUT: Hoek ");
     Serial.print(angle);
@@ -166,8 +149,7 @@ void parseCommand(String command) {
     return;
   }
   
-  // Stuur servo aan
-  setServoAngle(servoName, angle);
+  setServoAngle(servoIndex, angle);
   
   Serial.print("OK: ");
   Serial.print(servoName);
@@ -175,17 +157,10 @@ void parseCommand(String command) {
   Serial.println(angle);
 }
 
-// Zet servo naar gegeven hoek (0-180 graden)
-void setServoAngle(String servoName, int angle) {
-  ServoConfig config = servos[servoName];
-  
-  // Omzetten van hoek (0-180) naar PWM pulsbreedte voor servo
-  // Standaard servo: 1ms (0°) tot 2ms (180°) bij 50Hz
-  // Bij 50Hz = 20ms per periode
-  // 1ms = 102 / 4096 * 20ms
-  // 2ms = 512 / 4096 * 20ms
+// Zet servo naar gegeven hoek
+void setServoAngle(int servoIndex, int angle) {
+  ServoConfig config = servos[servoIndex];
   int pulseLength = map(angle, 0, 180, 102, 512);
-  
   setPWM(config.pca_pin, 0, pulseLength);
 }
 
@@ -193,10 +168,8 @@ void setServoAngle(String servoName, int angle) {
 void goToStartPositions() {
   Serial.println("Servo's naar middenstand...");
   
-  for (auto& servo : servos) {
-    String name = servo.first;
-    ServoConfig config = servo.second;
-    setServoAngle(name, config.start_angle);
+  for (int i = 0; i < NUM_SERVOS; i++) {
+    setServoAngle(i, servos[i].start_angle);
     delay(50);
   }
   
